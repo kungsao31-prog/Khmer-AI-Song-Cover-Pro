@@ -1,0 +1,133 @@
+
+<!DOCTYPE html>
+<html lang="km">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#080d18">
+<title>Khmer AI Song Cover Pro</title>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#080d18;color:white;
+ font-family:Arial,sans-serif;
+}
+header{padding:22px;background:#111b2c;
+ border-bottom:1px solid #26364d}
+h1{font-size:23px;color:#27d8ee}
+main{padding:16px;max-width:750px;margin:auto}
+.card{
+ background:#111b2c;padding:18px;
+ border:1px solid #26364d;border-radius:15px;
+ margin-bottom:17px;
+}
+h2{font-size:18px;color:#35d9ef}
+label{display:block;margin:14px 0 7px}
+input,textarea,select{
+ width:100%;padding:13px;border-radius:9px;
+ background:#091321;color:white;
+ border:1px solid #35465c;font-size:15px;
+}
+textarea{min-height:110px;resize:vertical}
+button{
+ width:100%;padding:14px;border:0;
+ border-radius:10px;background:#08b9d2;
+ color:#001018;font-size:16px;font-weight:bold;
+ margin-top:12px;
+}
+.secondary{background:#243a54;color:white}
+small{color:#9eb2c9}
+#status{color:#39e5b0;margin-top:12px}
+</style>
+</head>
+<body>
+<header>
+<h1>🎵 Khmer AI Song Cover Pro</h1>
+<small>AI Khmer Music & Video Studio</small>
+</header>
+<main>
+
+<section class="card">
+<h2>01 - បង្កើតបទចម្រៀងថ្មី</h2>
+<label>ចំណងជើងបទចម្រៀង</label>
+<input id="title" placeholder="បញ្ចូលចំណងជើងបទ">
+
+<label>អត្ថបទចម្រៀងខ្មែរ</label>
+<textarea id="lyrics" placeholder="សរសេរអត្ថបទចម្រៀងនៅទីនេះ..."></textarea>
+
+<label>ប្រភេទភ្លេង</label>
+<select id="style">
+<option value="pop">Khmer Pop</option>
+<option value="romantic">បទមនោសញ្ចេតនា</option>
+<option value="traditional">ភ្លេងប្រពៃណីខ្មែរ</option>
+<option value="country">បទស្រុកស្រែ</option>
+<option value="dance">Dance Music</option>
+</select>
+
+<label>សំឡេងច្រៀង</label>
+<select id="voice">
+<option value="male">ប្រុស</option>
+<option value="female">ស្រី</option>
+<option value="duet">ប្រុស និងស្រី</option>
+</select>
+<button onclick="generateSong()">🎵 បង្កើតបទចម្រៀង</button>
+</section>
+
+<section class="card">
+<h2>02 - Song Cover</h2>
+<label>Upload បទចម្រៀងដើម</label>
+<input type="file" id="songFile" accept="audio/*">
+<label>សំឡេង Cover</label>
+<select id="coverVoice">
+<option value="male">សំឡេងប្រុស</option>
+<option value="female">សំឡេងស្រី</option>
+</select>
+<button onclick="makeCover()">🎤 បង្កើត Song Cover</button>
+</section>
+
+<section class="card">
+<h2>03 - បង្កើត Music Video</h2>
+<label>បញ្ចូលរូបភាព</label>
+<input type="file" id="images" accept="image/*" multiple>
+
+<label>ទំហំវីដេអូ</label>
+<select id="format">
+<option value="9:16">បញ្ឈរ 9:16</option>
+<option value="16:9">ផ្ដេក 16:9</option>
+</select>
+
+<label>អក្សរចម្រៀង</label>
+<select id="subtitles">
+<option value="yes">បង្ហាញអក្សរខ្មែរ</option>
+<option value="no">មិនបង្ហាញអក្សរ</option>
+</select>
+
+<button onclick="makeVideo()">🎬 បង្កើតវីដេអូពេញបទ</button>
+</section>
+
+<section class="card">
+<h2>04 - លទ្ធផល</h2>
+<div id="result">មិនទាន់មានលទ្ធផលនៅឡើយទេ</div>
+<p id="status">ប្រព័ន្ធរង់ចាំការភ្ជាប់ AI</p>
+</section>
+
+</main>
+<script>
+function generateSong(){
+ document.getElementById("status").textContent=
+ "មុខងារបង្កើតចម្រៀងរង់ចាំការភ្ជាប់ AI Music Provider";
+}
+function makeCover(){
+ document.getElementById("status").textContent=
+ "មុខងារ Cover រង់ចាំការភ្ជាប់ AI Voice Provider";
+}
+function makeVideo(){
+ const files=document.getElementById("images").files;
+ document.getElementById("status").textContent=
+ files.length ? "បានជ្រើសរើសរូបភាព "+files.length+" សន្លឹក។ រង់ចាំការភ្ជាប់ AI Video Provider" :
+ "សូមបញ្ចូលរូបភាពជាមុន";
+}
+</script>
+</body>
+  </html>
+  
