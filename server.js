@@ -20,8 +20,22 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
+const OUTPUT_DIR = path.join(os.tmpdir(), "khmer_ai_videos");
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+// រក្សាទុកឯកសារលើ Disk ផ្ទាល់ ដើម្បីកុំឱ្យពេញ RAM របស់ Render
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, OUTPUT_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || "";
+    cb(null, `up_${Date.now()}_${Math.random().toString(36).slice(2, 7)}${ext}`);
+  }
+});
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage,
   limits: { fileSize: 50 * 1024 * 1024, files: 12 },
   fileFilter: (req, file, cb) => {
     const allowed =
@@ -31,13 +45,14 @@ const upload = multer({
   }
 });
 
-const OUTPUT_DIR = path.join(os.tmpdir(), "khmer_ai_videos");
-if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-}
-
 const jobs = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function safeUnlink(filePath) {
+  try {
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (_) {}
+}
 
 // ==================================
 // PWA FILES (ICON, MANIFEST, SW)
@@ -61,14 +76,7 @@ app.get("/manifest.json", (req, res) => {
     display: "standalone",
     background_color: "#080d18",
     theme_color: "#080d18",
-    icons: [
-      {
-        src: "/icon.svg",
-        sizes: "any",
-        type: "image/svg+xml",
-        purpose: "any maskable"
-      }
-    ]
+    icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }]
   });
 });
 
@@ -76,38 +84,33 @@ app.get("/sw.js", (req, res) => {
   res.type("application/javascript").send(`
     self.addEventListener("install", (e) => self.skipWaiting());
     self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
-    self.addEventListener("fetch", (e) => {
-      e.respondWith(fetch(e.request));
-    });
+    self.addEventListener("fetch", (e) => e.respondWith(fetch(e.request)));
   `);
 });
 
 // ==================================
-// GEMINI AI SONG WRITER (AUTO RETRY)
+// GEMINI AI SONG WRITER
 // ==================================
 
 async function writeKhmerSong({ title, topic, style, voice, details }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY មិនទាន់បានកំណត់ក្នុង Render");
+    throw new Error("មិនទាន់បានដាក់ GEMINI_API_KEY ក្នុង Render Environment ទេ");
   }
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-  const modelsToTry = [primaryModel, primaryModel];
-  
 
-  const prompt = `
-  
-  
+  const modelsToTry = [
+    process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    "gemini-2.5-flash-lite"
+  ];
 
-អ្នកគឺជាអ្នកនិពន្ធបទចម្រៀងខ្មែរដែលមានជំនាញ។ សូមនិពន្ធបទចម្រៀងថ្មីជាភាសាខ្មែរទាំងស្រុង។
+  const prompt = `អ្នកគឺជាអ្នកនិពន្ធបទចម្រៀងខ្មែរដែលមានជំនាញ។ សូមនិពន្ធបទចម្រៀងថ្មីជាភាសាខ្មែរទាំងស្រុង។
 ចំណងជើង៖ ${title || "បង្កើតដោយស្វ័យប្រវត្តិ"}
 ប្រធានបទ៖ ${topic || "ប្រធានបទទូទៅ"}
 ប្រភេទភ្លេង៖ ${style || "Khmer Pop"}
 សំឡេងច្រៀង៖ ${voice || "male"}
 ព័ត៌មានបន្ថែម៖ ${details || "គ្មាន"}
 
-សូមសរសេរឱ្យមាន [Intro], [Verse 1], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro] ដោយមានចង្វាក់ និងពាក្យចួនពីរោះ។ កុំសរសេរការពន្យល់ក្រៅពីបទចម្រៀង។
-`;
+សូមសរសេរឱ្យមាន [Intro], [Verse 1], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro] ដោយមានចង្វាក់ និងពាក្យចួនពីរោះ។ កុំសរសេរការពន្យល់ក្រៅពីបទចម្រៀង។`;
 
   let lastError = "Gemini AI មិនអាចបង្កើតបទចម្រៀងបាន";
 
@@ -122,16 +125,14 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
             "Content-Type": "application/json",
             "x-goog-api-key": apiKey
           },
-                    body: JSON.stringify({
+          body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { temperature: 0.9, maxOutputTokens: 2048 }
           })
         }
       );
-      
 
       const data = await response.json();
-
       if (response.ok) {
         const lyrics = data.candidates?.[0]?.content?.parts
           ?.map((p) => p.text || "")
@@ -144,18 +145,32 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
     } catch (err) {
       lastError = err.message;
     }
-
-    if (i < modelsToTry.length - 1) {
-      await sleep(2000);
-    }
+    if (i < modelsToTry.length - 1) await sleep(1500);
   }
 
-  throw new Error("ប្រព័ន្ធ AI កំពុងមមាញឹកខ្លាំង សូមចុចសាកល្បងម្ដងទៀត (" + lastError + ")");
+  throw new Error("AI មានបញ្ហា៖ " + lastError);
 }
 
 // ==================================
-// FFMPEG WITH PROGRESS %
+// FFMPEG HELPERS (LOW RAM)
 // ==================================
+
+function getAudioDurationSec(audioPath) {
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, ["-i", audioPath]);
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.on("close", () => {
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.\d+)/);
+      if (m) {
+        resolve(parseFloat(m[1]) * 3600 + parseFloat(m[2]) * 60 + parseFloat(m[3]));
+      } else {
+        resolve(60);
+      }
+    });
+    proc.on("error", () => resolve(60));
+  });
+}
 
 function runFfmpegWithProgress(args, jobId, estimatedDurationSec) {
   return new Promise((resolve, reject) => {
@@ -167,11 +182,17 @@ function runFfmpegWithProgress(args, jobId, estimatedDurationSec) {
       stderrLog += text;
       const match = text.match(/time=(\d+):(\d+):(\d+\.\d+)/);
       if (match && jobs.has(jobId)) {
-        const currentSec = parseFloat(match[1]) * 3600 + parseFloat(match[2]) * 60 + parseFloat(match[3]);
-        const pct = Math.min(95, Math.max(15, Math.round((currentSec / estimatedDurationSec) * 80) + 15));
+        const currentSec =
+          parseFloat(match[1]) * 3600 +
+          parseFloat(match[2]) * 60 +
+          parseFloat(match[3]);
+        const pct = Math.min(
+          95,
+          Math.max(15, Math.round((currentSec / Math.max(1, estimatedDurationSec)) * 80) + 15)
+        );
         const job = jobs.get(jobId);
         job.progress = pct;
-        job.message = "កំពុងបង្កើតវីដេអូ និងចលនា... (" + pct + "%)";
+        job.message = "កំពុងបង្កើតវីដេអូ... (" + pct + "%)";
       }
     });
 
@@ -179,7 +200,7 @@ function runFfmpegWithProgress(args, jobId, estimatedDurationSec) {
       if (code === 0) resolve();
       else {
         console.error("FFmpeg stderr:", stderrLog.slice(-1000));
-        reject(new Error("FFmpeg មិនអាចបង្កើតវីដេអូបានទេ (Code " + code + ")"));
+        reject(new Error("FFmpeg បរាជ័យ (Code " + code + ")"));
       }
     });
     proc.on("error", reject);
@@ -200,7 +221,6 @@ app.get("/", (req, res) => {
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <title>Khmer AI Song Cover Pro</title>
-
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#080d18;color:white;font-family:Arial,sans-serif}
@@ -217,16 +237,14 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .secondary{background:#263a53;color:white}
 .install-btn{background:linear-gradient(90deg,#16a34a,#22c55e);color:#fff;margin-top:12px;padding:12px;font-size:15px}
 #status,#songStatus{color:#39e5b0;white-space:pre-wrap;font-size:14px;margin-top:10px}
-#lyrics{min-height:260px;line-height:1.7}
+#lyrics{min-height:220px;line-height:1.7}
 video{width:100%;max-height:460px;border-radius:10px;margin-top:10px;background:#000}
 small{color:#9eb2c9}
-
 .progress-wrap{display:none;margin-top:14px;background:#091321;border-radius:10px;overflow:hidden;border:1px solid #35465c;height:26px;position:relative}
 .progress-bar{height:100%;width:0%;background:linear-gradient(90deg,#08b9d2,#39e5b0);transition:width 0.4s ease}
 .progress-text{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:bold;color:#fff;text-shadow:0 1px 3px #000}
 </style>
 </head>
-
 <body>
 <header>
 <h1>🎵 Khmer AI Song Cover Pro</h1>
@@ -235,7 +253,6 @@ small{color:#9eb2c9}
 </header>
 
 <main>
-
 <section class="card">
 <h2>01 - AI សរសេរបទចម្រៀងស្វ័យប្រវត្តិ</h2>
 <label>ចំណងជើងបទចម្រៀង (អាចទុកទទេ)</label>
@@ -268,28 +285,25 @@ small{color:#9eb2c9}
 </select>
 
 <button id="writeBtn" onclick="generateSong()">✍️ AI សរសេរបទចម្រៀង</button>
-
 <div class="progress-wrap" id="songProgressWrap">
   <div class="progress-bar" id="songProgressBar"></div>
   <div class="progress-text" id="songProgressText">0%</div>
 </div>
 <p id="songStatus"></p>
 
-<label>អត្ថបទចម្រៀង</label>
-<textarea id="lyrics" placeholder="បទចម្រៀងនឹងបង្ហាញនៅទីនេះ..."></textarea>
-<button class="secondary" onclick="copyLyrics()">📋 ចម្លងអត្ថបទចម្រៀង</button>
-<button type="button" id="ttsBtn" style="margin-top:10px; background:#8b5cf6;">🔊 បង្កើតសំឡេងខ្មែរ (AI Voice)</button>
-<div id="ttsBox" style="display:none; margin-top:10px;">
-
+<label>អត្ថបទចម្រៀង ឬអត្ថបទនិទាន</label>
+<textarea id="lyrics" placeholder="បទចម្រៀង ឬអត្ថបទនឹងបង្ហាញនៅទីនេះ..."></textarea>
+<button class="secondary" onclick="copyLyrics()">📋 ចម្លងអត្ថបទ</button>
+<button type="button" id="ttsBtn" style="margin-top:10px;background:#8b5cf6;color:white;">🔊 បង្កើតសំឡេងខ្មែរ (AI Voice)</button>
+<div id="ttsBox" style="display:none;margin-top:10px;">
   <audio id="ttsAudio" controls style="width:100%;"></audio>
-  <a id="ttsDownload" download="khmer-voice.mp3" style="display:block; text-align:center; margin-top:6px; color:#38bdf8;">⬇️ ទាញយកសំឡេង (MP3) ដើម្បីដាក់ក្នុងវីដេអូ</a>
+  <a id="ttsDownload" download="khmer-voice.mp3" style="display:block;text-align:center;margin-top:6px;color:#38bdf8;">⬇️ ទាញយកសំឡេង (MP3) ដើម្បីដាក់ក្នុងវីដេអូ</a>
 </div>
-<button type="button" id="sunoBtn" style="margin-top:10px; background:#f59e0b;">🎵 ចម្លងអត្ថបទ & បើក Suno AI</button>
+<button type="button" id="sunoBtn" style="margin-top:10px;background:#f59e0b;">🎵 ចម្លងអត្ថបទ & បើក Suno AI</button>
 </section>
+
 <section class="card">
-
 <h2>02 - បញ្ចូលរូបភាព និងបទចម្រៀងបង្កើតវីដេអូ</h2>
-
 <label>១. បញ្ចូលរូបភាព (១ ឬច្រើនសន្លឹក)</label>
 <input type="file" id="images" accept="image/*" multiple>
 
@@ -304,12 +318,11 @@ small{color:#9eb2c9}
 
 <label>៤. ប្រភេទចលនាវីដេអូ</label>
 <select id="motion">
-<option value="zoom">មានចលនា Zoom រលូន (ណែនាំ)</option>
-<option value="static">រូបភាពនឹង (លឿនបំផុត)</option>
+<option value="static">រូបភាពនឹង (លឿនបំផុត - ណែនាំ)</option>
+<option value="zoom">មានចលនា Zoom រលូន</option>
 </select>
 
 <button id="videoBtn" onclick="makeVideo()">🎬 បង្កើតវីដេអូពេញបទ</button>
-
 <div class="progress-wrap" id="progressWrap">
   <div class="progress-bar" id="progressBar"></div>
   <div class="progress-text" id="progressText">0%</div>
@@ -321,28 +334,24 @@ small{color:#9eb2c9}
 <div id="result">មិនទាន់មានលទ្ធផល</div>
 <p id="status">ប្រព័ន្ធរង់ចាំ...</p>
 </section>
-
 </main>
 
 <script>
-// ចុះឈ្មោះ Service Worker សម្រាប់ដំឡើងជា App
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(function(){});
 }
-
 var deferredPrompt = null;
 window.addEventListener("beforeinstallprompt", function(e) {
   e.preventDefault();
   deferredPrompt = e;
 });
-
 async function installApp() {
   if (deferredPrompt) {
     deferredPrompt.prompt();
     await deferredPrompt.userChoice;
     deferredPrompt = null;
   } else {
-    alert("ដើម្បីដំឡើងកម្មវិធីលើទូរស័ព្ទ៖\\n1. ចុចសញ្ញាចុច ៣ (⋮) នៅជ្រុងខាងលើស្ដាំនៃ Chrome\\n2. ចុចពាក្យ 'Add to Home screen' ឬ 'Install app'\\n3. ចុច 'Install' ជាការស្រេច!");
+    alert("ចុចសញ្ញាចុច ៣ (⋮) ខាងលើស្ដាំនៃ Chrome > Add to Home screen ឬ Install app");
   }
 }
 
@@ -359,12 +368,10 @@ async function generateSong() {
   btn.textContent = "⏳ កំពុងសរសេរបទចម្រៀង...";
   var pct = 10;
   setSongProgress(pct, "កំពុងភ្ជាប់ទៅ Gemini AI...");
-
   var fakeTimer = setInterval(function() {
     if (pct < 90) {
-      pct += Math.floor(Math.random() * 8) + 4;
-      if (pct > 90) pct = 90;
-      setSongProgress(pct, "AI កំពុងនិពន្ធអត្ថបទចម្រៀង... (" + pct + "%)");
+      pct += 6;
+      setSongProgress(pct, "AI កំពុងនិពន្ធ... (" + pct + "%)");
     }
   }, 800);
 
@@ -381,15 +388,13 @@ async function generateSong() {
     });
     var data = await res.json();
     clearInterval(fakeTimer);
-
-    if (!res.ok) throw new Error(data.message || "មានបញ្ហា");
+    if (!res.ok || !data.ok) throw new Error(data.message || data.error || "មានបញ្ហា");
     document.getElementById("lyrics").value = data.lyrics;
     setSongProgress(100, "បានសរសេរបទចម្រៀងជោគជ័យ 100%!");
   } catch (err) {
     clearInterval(fakeTimer);
     setSongProgress(0, "បញ្ហា៖ " + err.message);
   }
-
   btn.disabled = false;
   btn.textContent = "✍️ AI សរសេរបទចម្រៀង";
 }
@@ -398,13 +403,14 @@ function copyLyrics() {
   var text = document.getElementById("lyrics").value;
   if (!text.trim()) return;
   navigator.clipboard.writeText(text);
-  document.getElementById("songStatus").textContent = "បានចម្លងអត្ថបទចម្រៀងហើយ!";
+  document.getElementById("songStatus").textContent = "បានចម្លងអត្ថបទហើយ!";
 }
+
 document.getElementById("ttsBtn").addEventListener("click", async () => {
   const text = document.getElementById("lyrics").value;
   const voice = document.getElementById("voice").value;
   const btn = document.getElementById("ttsBtn");
-  if (!text.trim()) return alert("សូមសរសេរបទចម្រៀងជាមុនសិន!");
+  if (!text.trim()) return alert("សូមបញ្ចូលអត្ថបទជាមុនសិន!");
   btn.disabled = true;
   btn.textContent = "⏳ កំពុងបង្កើតសំឡេងខ្មែរ...";
   try {
@@ -414,7 +420,7 @@ document.getElementById("ttsBtn").addEventListener("click", async () => {
       body: JSON.stringify({ text, voice })
     });
     const data = await res.json();
-    if (!data.ok) throw new Error(data.message);
+    if (!res.ok || !data.ok) throw new Error(data.message || data.error || "បង្កើតសំឡេងមិនបាន");
     document.getElementById("ttsAudio").src = data.audioUrl;
     document.getElementById("ttsDownload").href = data.audioUrl;
     document.getElementById("ttsBox").style.display = "block";
@@ -464,10 +470,10 @@ async function makeVideo() {
   try {
     var res = await fetch("/api/video/create", { method: "POST", body: form });
     var data = await res.json();
-    if (!res.ok) throw new Error(data.message || "មិនអាចចាប់ផ្ដើមបានទេ");
+    if (!res.ok || !data.ok) throw new Error(data.message || "មិនអាចចាប់ផ្ដើមបានទេ");
 
     var jobId = data.jobId;
-    setProgress(15, "កំពុងរៀបចំបង្កើតវីដេអូ...");
+    setProgress(15, "កំពុងផ្គុំវីដេអូ...");
 
     var timer = setInterval(async function() {
       try {
@@ -504,7 +510,6 @@ async function makeVideo() {
   }
 }
 </script>
-
 </body>
 </html>`);
 });
@@ -523,7 +528,49 @@ app.post("/api/song/write", async (req, res) => {
 });
 
 // ==================================
-// API: CREATE VIDEO (ASYNC + PROGRESS %)
+// API: KHMER TTS VOICE
+// ==================================
+
+app.post("/api/tts", async (req, res) => {
+  try {
+    const rawText = (req.body?.text || "").replace(/\[[^\]]+\]/g, " ").trim();
+    if (!rawText) {
+      return res.status(400).json({ ok: false, message: "សូមបញ្ចូលអត្ថបទជាមុន" });
+    }
+    const voiceName =
+      req.body?.voice === "female" ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
+
+    const fileName = `tts_${Date.now()}.mp3`;
+    const filePath = path.join(OUTPUT_DIR, fileName);
+
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+
+    const chunks = rawText.match(/.{1,600}(\s|$)/gs) || [rawText];
+    const writeStream = fs.createWriteStream(filePath);
+
+    for (const chunk of chunks) {
+      if (!chunk.trim()) continue;
+      await new Promise((resolve, reject) => {
+        const resStream = tts.toStream(chunk.trim());
+        const audioStream = resStream.audioStream || resStream;
+        audioStream.on("data", (d) => writeStream.write(d));
+        audioStream.on("end", resolve);
+        audioStream.on("error", reject);
+      });
+    }
+    writeStream.end();
+    await new Promise((r) => writeStream.on("finish", r));
+
+    res.json({ ok: true, audioUrl: "/api/video/file/" + fileName });
+  } catch (err) {
+      console.error("TTS Error:", err);
+    res.status(500).json({ ok: false, message: "មិនអាចបង្កើតសំឡេងបាន៖ " + err.message });
+  }
+});
+
+// ==================================
+// API: CREATE VIDEO (OPTIMIZED FOR RENDER FREE)
 // ==================================
 
 app.post(
@@ -543,8 +590,8 @@ app.post(
     const jobId = Date.now().toString();
     jobs.set(jobId, {
       status: "processing",
-      progress: 10,
-      message: "កំពុងរក្សាទុកឯកសារ...",
+      progress: 12,
+      message: "កំពុងរៀបចំឯកសារ...",
       videoUrl: null,
       error: null
     });
@@ -552,81 +599,75 @@ app.post(
     res.json({ ok: true, jobId });
 
     (async () => {
-      const jobDir = path.join(os.tmpdir(), "job_" + jobId);
-      fs.mkdirSync(jobDir, { recursive: true });
+      const savedImages = imageFiles.map((f) => f.path);
+      const audioPath = audioFile ? audioFile.path : null;
 
       try {
         const format = req.body.format === "16:9" ? "16:9" : "9:16";
-        const useMotion = req.body.motion !== "static";
+        const useMotion = req.body.motion === "zoom";
         const width = format === "16:9" ? 960 : 540;
         const height = format === "16:9" ? 540 : 960;
 
-        const savedImages = [];
-        for (let i = 0; i < imageFiles.length; i++) {
-          const ext = path.extname(imageFiles[i].originalname) || ".jpg";
-          const imgPath = path.join(jobDir, `img_${i}${ext}`);
-          fs.writeFileSync(imgPath, imageFiles[i].buffer);
-          savedImages.push(imgPath);
-        }
-
-        let audioPath = null;
-        if (audioFile) {
-          const ext = path.extname(audioFile.originalname) || ".mp3";
-          audioPath = path.join(jobDir, `audio${ext}`);
-          fs.writeFileSync(audioPath, audioFile.buffer);
-        }
-
         const outputFileName = `video_${jobId}.mp4`;
         const outputPath = path.join(OUTPUT_DIR, outputFileName);
-                const args = [];
-        const estimatedSec = audioPath ? 60 : Math.max(10, savedImages.length * 5);
+        const estimatedSec = audioPath
+          ? await getAudioDurationSec(audioPath)
+          : Math.max(10, savedImages.length * 5);
+
+        const args = ["-y"];
 
         if (savedImages.length === 1) {
-          args.push("-loop", "1", "-i", savedImages[0]);
+          const fps = useMotion ? 12 : 2;
+          args.push("-loop", "1", "-framerate", String(fps), "-i", savedImages[0]);
           if (audioPath) args.push("-i", audioPath);
           else args.push("-t", "10");
 
           const vf = useMotion
-  ? `scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0005,1.2)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=720x1280:fps=15,format=yuv420p`
-  : `scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
-args.push("-threads", "1");
-     
-          args.push("-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-r", "20");
-          if (audioPath) args.push("-c:a", "aac", "-b:a", "128k", "-shortest");
-          args.push("-movflags", "+faststart", "-y", outputPath);
-        } else {
-          const durationPerImage = 5;
-          let filterComplex = "";
-          for (let i = 0; i < savedImages.length; i++) {
-            args.push("-loop", "1", "-t", String(durationPerImage), "-i", savedImages[i]);
-            if (useMotion) {
-              filterComplex += `[${i}:v]scale=${width * 2}:${height * 2}:force_original_aspect_ratio=decrease,pad=${width * 2}:${height * 2}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.001,1.2)':d=${durationPerImage * 20}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=20,format=yuv420p[v${i}];`;
-            } else {
-              filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=20,format=yuv420p[v${i}];`;
-            }
-          }
-          for (let i = 0; i < savedImages.length; i++) filterComplex += `[v${i}]`;
-          filterComplex += `concat=n=${savedImages.length}:v=1:a=0[v]`;
+            ? `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0004,1.18)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=${fps},format=yuv420p`
+            : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
 
+          args.push("-vf", vf);
+        } else {
+          const durPerImg = Math.max(2, estimatedSec / savedImages.length);
+          let filter = "";
+          for (let i = 0; i < savedImages.length; i++) {
+            args.push("-loop", "1", "-framerate", "2", "-t", String(durPerImg), "-i", savedImages[i]);
+            filter += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v${i}];`;
+          }
           if (audioPath) args.push("-i", audioPath);
-          args.push("-filter_complex", filterComplex, "-map", "[v]");
-          if (audioPath) args.push("-map", `${savedImages.length}:a`, "-c:a", "aac", "-b:a", "128k", "-shortest");
-          args.push("-c:v", "libx264", "-preset", "ultrafast", "-movflags", "+faststart", "-y", outputPath);
+          for (let i = 0; i < savedImages.length; i++) filter += `[v${i}]`;
+          filter += `concat=n=${savedImages.length}:v=1:a=0[outv]`;
+          args.push("-filter_complex", filter, "-map", "[outv]");
+          if (audioPath) args.push("-map", `${savedImages.length}:a`);
         }
 
-        await runFfmpegWithProgress(args, jobId, estimatedSec);
-        fs.rmSync(jobDir, { recursive: true, force: true });
+        args.push(
+          "-c:v", "libx264",
+          "-preset", "ultrafast",
+          "-crf", "28",
+          "-threads", "1"
+        );
+        if (!useMotion) args.push("-tune", "stillimage");
+        if (audioPath) args.push("-c:a", "aac", "-b:a", "128k", "-shortest");
+        args.push("-movflags", "+faststart", outputPath);
 
-        jobs.set(jobId, {
-          status: "done",
-          progress: 100,
-          message: "បានបង្កើតវីដេអូជោគជ័យ!",
-          videoUrl: `/api/video/file/${outputFileName}`,
-          error: null
-        });
+        await runFfmpegWithProgress(args, jobId, estimatedSec);
+
+        const job = jobs.get(jobId);
+        if (job) {
+          job.status = "done";
+          job.progress = 100;
+          job.videoUrl = "/api/video/file/" + outputFileName;
+        }
       } catch (err) {
-        fs.rmSync(jobDir, { recursive: true, force: true });
-        jobs.set(jobId, { status: "error", progress: 0, message: "បរាជ័យ", videoUrl: null, error: err.message });
+        const job = jobs.get(jobId);
+        if (job) {
+          job.status = "error";
+          job.error = err.message;
+        }
+      } finally {
+        savedImages.forEach(safeUnlink);
+        safeUnlink(audioPath);
       }
     })();
   }
@@ -634,61 +675,20 @@ args.push("-threads", "1");
 
 app.get("/api/video/status/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
-  if (!job) return res.status(404).json({ status: "error", error: "រកមិនឃើញការងារនេះទេ" });
+  if (!job) {
+    return res.json({ status: "error", error: "រកមិនឃើញការងារនេះទេ (Server អាចបាន Restart)" });
+  }
   res.json(job);
 });
 
 app.get("/api/video/file/:filename", (req, res) => {
   const safeName = path.basename(req.params.filename);
   const filePath = path.join(OUTPUT_DIR, safeName);
-  if (!fs.existsSync(filePath)) return res.status(404).send("រកមិនឃើញវីដេអូទេ");
-  res.setHeader("Content-Type", "video/mp4");
+  if (!fs.existsSync(filePath)) return res.status(404).send("រកមិនឃើញឯកសារទេ");
   res.sendFile(filePath);
 });
-app.post("/api/tts", async (req, res) => {
-  try {
-    const { text, voice } = req.body;
-    if (!text || !text.trim()) {
-      return res.status(400).json({ ok: false, message: "សូមបង្កើត ឬបញ្ចូលអត្ថបទជាមុនសិន" });
-    }
-    const cleanText = text.replace(/\[.*?\]/g, "").trim();
-    const voiceName = voice === "female" ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
-    const fileName = `voice_${Date.now()}.mp3`;
-    const filePath = path.join(OUTPUT_DIR, fileName);
 
-    const tts = new MsEdgeTTS();
-    await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const { audioStream } = tts.toStream(cleanText);
-
-    await new Promise((resolve, reject) => {
-      const writeStream = fs.createWriteStream(filePath);
-      audioStream.pipe(writeStream);
-      writeStream.on("finish", resolve);
-      writeStream.on("error", reject);
-      audioStream.on("error", reject);
-    });
-
-    res.json({ ok: true, audioUrl: `/api/audio/file/${fileName}` });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: "បរាជ័យ៖ " + err.message });
-  }
-});
-
-app.get("/api/audio/file/:filename", (req, res) => {
-  const safeName = path.basename(req.params.filename);
-  const filePath = path.join(OUTPUT_DIR, safeName);
-  if (!fs.existsSync(filePath)) return res.status(404).send("រកមិនឃើញសំឡេងទេ");
-  res.setHeader("Content-Type", "audio/mpeg");
-  res.sendFile(filePath);
-});
-                                               
-app.use((err, req, res, next) => {
-  console.error(err.message);
-  res.status(err.status || 500).json({ ok: false, message: err.message || "Internal Server Error" });
-});
-
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, () => {
   console.log("Khmer AI Song Cover Pro running on port " + PORT);
 });
-
         
