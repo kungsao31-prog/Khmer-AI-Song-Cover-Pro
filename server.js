@@ -272,5 +272,292 @@ async function generateSong() {
       })
     });
     var data = await res.json();
-    if (!res.ok) throw new Error(
-  
+    if (!res.ok) throw new Error(data.message || "មានបញ្ហា");
+    document.getElementById("lyrics").value = data.lyrics;
+    status.textContent = "បានសរសេរបទចម្រៀងជោគជ័យ!";
+  } catch (err) {
+    status.textContent = "បញ្ហា៖ " + err.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = "✍️ AI សរសេរបទចម្រៀង";
+}
+
+function copyLyrics() {
+  var text = document.getElementById("lyrics").value;
+  if (!text.trim()) return;
+  navigator.clipboard.writeText(text);
+  document.getElementById("status").textContent = "បានចម្លងអត្ថបទចម្រៀងហើយ!";
+}
+
+function setProgress(pct, msg) {
+  var wrap = document.getElementById("progressWrap");
+  var bar = document.getElementById("progressBar");
+  var txt = document.getElementById("progressText");
+  wrap.style.display = "block";
+  bar.style.width = pct + "%";
+  txt.textContent = pct + "%";
+  if (msg) document.getElementById("status").textContent = msg;
+}
+
+async function makeVideo() {
+  var files = document.getElementById("images").files;
+  var audioFile = document.getElementById("audio").files[0];
+  var btn = document.getElementById("videoBtn");
+  var resultBox = document.getElementById("result");
+
+  if (!files.length) {
+    document.getElementById("status").textContent = "សូមបញ្ចូលរូបភាពយ៉ាងតិច ១ សន្លឹកជាមុន";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "⏳ កំពុងបង្កើតវីដេអូ...";
+  resultBox.textContent = "កំពុងដំណើរការ...";
+  setProgress(5, "កំពុងបញ្ជូនរូបភាព និងសំឡេងទៅម៉ាស៊ីនមេ...");
+
+  var form = new FormData();
+  for (var i = 0; i < files.length; i++) {
+    form.append("images", files[i]);
+  }
+  if (audioFile) {
+    form.append("audio", audioFile);
+  }
+  form.append("format", document.getElementById("format").value);
+  form.append("motion", document.getElementById("motion").value);
+
+  try {
+    var res = await fetch("/api/video/create", { method: "POST", body: form });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.message || "មិនអាចចាប់ផ្ដើមបានទេ");
+
+    var jobId = data.jobId;
+    setProgress(15, "កំពុងរៀបចំបង្កើតវីដេអូ...");
+
+    // តាមដានភាគរយរៀងរាល់ ១.៥ វិនាទី
+    var timer = setInterval(async function() {
+      try {
+        var stRes = await fetch("/api/video/status/" + jobId);
+        var stData = await stRes.json();
+
+        if (stData.status === "processing") {
+          setProgress(stData.progress || 20, stData.message);
+        } else if (stData.status === "done") {
+          clearInterval(timer);
+          setProgress(100, "បង្កើតវីដេអូជោគជ័យ 100%!");
+          resultBox.innerHTML =
+            '<video controls playsinline preload="metadata" src="' + stData.videoUrl + '"></video>' +
+            '<a class="download-btn" href="' + stData.videoUrl + '" download="khmer-music-video.mp4">⬇️ ទាញយកវីដេអូ (Download MP4)</a>';
+          btn.disabled = false;
+          btn.textContent = "🎬 បង្កើតវីដេអូពេញបទ";
+        } else if (stData.status === "error") {
+          clearInterval(timer);
+          document.getElementById("status").textContent = "បញ្ហា៖ " + stData.error;
+          btn.disabled = false;
+          btn.textContent = "🎬 បង្កើតវីដេអូពេញបទ";
+        }
+      } catch (e) {
+        clearInterval(timer);
+        document.getElementById("status").textContent = "បញ្ហាការតភ្ជាប់៖ " + e.message;
+        btn.disabled = false;
+        btn.textContent = "🎬 បង្កើតវីដេអូពេញបទ";
+      }
+    }, 1500);
+
+  } catch (err) {
+    document.getElementById("status").textContent = "បញ្ហា៖ " + err.message;
+    btn.disabled = false;
+    btn.textContent = "🎬 បង្កើតវីដេអូពេញបទ";
+  }
+}
+</script>
+
+</body>
+</html>`);
+});
+
+// ==================================
+// API: WRITE SONG
+// ==================================
+
+app.post("/api/song/write", async (req, res) => {
+  try {
+    const lyrics = await writeKhmerSong(req.body || {});
+    res.json({ ok: true, lyrics });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+// ==================================
+// API: CREATE VIDEO (ASYNC + PROGRESS %)
+// ==================================
+
+app.post(
+  "/api/video/create",
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "audio", maxCount: 1 }
+  ]),
+  (req, res) => {
+    const imageFiles = req.files?.images || [];
+    const audioFile = req.files?.audio?.[0] || null;
+
+    if (!imageFiles.length) {
+      return res.status(400).json({ ok: false, message: "សូមបញ្ចូលរូបភាពជាមុន" });
+    }
+
+    const jobId = Date.now().toString();
+    jobs.set(jobId, {
+      status: "processing",
+      progress: 10,
+      message: "កំពុងរក្សាទុកឯកសារ...",
+      videoUrl: null,
+      error: null
+    });
+
+    // ផ្ញើ jobId ត្រឡប់ទៅភ្លាមៗ ដើម្បីឱ្យទូរស័ព្ទតាមដានភាគរយបាន
+    res.json({ ok: true, jobId });
+
+    // ដំណើរការ FFmpeg នៅផ្ទៃខាងក្រោយ
+    (async () => {
+      const jobDir = path.join(os.tmpdir(), "job_" + jobId);
+      fs.mkdirSync(jobDir, { recursive: true });
+
+      try {
+        const format = req.body.format === "16:9" ? "16:9" : "9:16";
+        const useMotion = req.body.motion !== "static";
+        // ប្រើទំហំសមល្មមដើម្បីកុំឱ្យ Render Free អស់ RAM
+        const width = format === "16:9" ? 960 : 540;
+        const height = format === "16:9" ? 540 : 960;
+
+        const savedImages = [];
+        for (let i = 0; i < imageFiles.length; i++) {
+          const ext = path.extname(imageFiles[i].originalname) || ".jpg";
+          const imgPath = path.join(jobDir, `img_${i}${ext}`);
+          fs.writeFileSync(imgPath, imageFiles[i].buffer);
+          savedImages.push(imgPath);
+        }
+
+        let audioPath = null;
+        if (audioFile) {
+          const ext = path.extname(audioFile.originalname) || ".mp3";
+          audioPath = path.join(jobDir, `audio${ext}`);
+          fs.writeFileSync(audioPath, audioFile.buffer);
+        }
+
+        const outputFileName = `video_${jobId}.mp4`;
+        const outputPath = path.join(OUTPUT_DIR, outputFileName);
+        const args = [];
+        const estimatedSec = audioPath ? 60 : Math.max(10, savedImages.length * 5);
+
+        if (savedImages.length === 1) {
+          args.push("-loop", "1", "-i", savedImages[0]);
+          if (audioPath) {
+            args.push("-i", audioPath);
+          } else {
+            args.push("-t", "10");
+          }
+
+          const vf = useMotion
+            ? `scale=${width * 2}:${height * 2}:force_original_aspect_ratio=decrease,pad=${width * 2}:${height * 2}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0005,1.25)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=20,format=yuv420p`
+            : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+
+          args.push(
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-r", "20"
+          );
+
+          if (audioPath) {
+            args.push("-c:a", "aac", "-b:a", "128k", "-shortest");
+          }
+          args.push("-movflags", "+faststart", "-y", outputPath);
+        } else {
+          const durationPerImage = 5;
+          let filterComplex = "";
+          for (let i = 0; i < savedImages.length; i++) {
+            args.push("-loop", "1", "-t", String(durationPerImage), "-i", savedImages[i]);
+            if (useMotion) {
+              filterComplex += `[${i}:v]scale=${width * 2}:${height * 2}:force_original_aspect_ratio=decrease,pad=${width * 2}:${height * 2}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.001,1.2)':d=${durationPerImage * 20}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=20,format=yuv420p[v${i}];`;
+            } else {
+              filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=20,format=yuv420p[v${i}];`;
+            }
+          }
+          for (let i = 0; i < savedImages.length; i++) {
+            filterComplex += `[v${i}]`;
+          }
+          filterComplex += `concat=n=${savedImages.length}:v=1:a=0[v]`;
+
+          if (audioPath) {
+            args.push("-i", audioPath);
+          }
+
+          args.push("-filter_complex", filterComplex, "-map", "[v]");
+          if (audioPath) {
+            args.push("-map", `${savedImages.length}:a`, "-c:a", "aac", "-b:a", "128k", "-shortest");
+          }
+          args.push("-c:v", "libx264", "-preset", "ultrafast", "-movflags", "+faststart", "-y", outputPath);
+        }
+
+        await runFfmpegWithProgress(args, jobId, estimatedSec);
+
+        fs.rmSync(jobDir, { recursive: true, force: true });
+
+        jobs.set(jobId, {
+          status: "done",
+          progress: 100,
+          message: "បានបង្កើតវីដេអូជោគជ័យ!",
+          videoUrl: `/api/video/file/${outputFileName}`,
+          error: null
+        });
+      } catch (err) {
+        fs.rmSync(jobDir, { recursive: true, force: true });
+        jobs.set(jobId, {
+          status: "error",
+          progress: 0,
+          message: "បរាជ័យ",
+          videoUrl: null,
+          error: err.message
+        });
+      }
+    })();
+  }
+);
+
+// ==================================
+// API: CHECK PROGRESS STATUS
+// ==================================
+
+app.get("/api/video/status/:jobId", (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ status: "error", error: "រកមិនឃើញការងារនេះទេ" });
+  }
+  res.json(job);
+});
+
+// ==================================
+// API: STREAM & DOWNLOAD VIDEO
+// ==================================
+
+app.get("/api/video/file/:filename", (req, res) => {
+  const safeName = path.basename(req.params.filename);
+  const filePath = path.join(OUTPUT_DIR, safeName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("រកមិនឃើញវីដេអូទេ");
+  }
+  res.setHeader("Content-Type", "video/mp4");
+  res.sendFile(filePath);
+});
+
+app.use((err, req, res, next) => {
+  console.error(err.message);
+  res.status(err.status || 500).json({ ok: false, message: err.message || "Internal Server Error" });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("Khmer AI Song Cover Pro running on port " + PORT);
+});
+          
