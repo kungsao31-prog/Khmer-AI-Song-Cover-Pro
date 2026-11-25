@@ -90,11 +90,13 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY មិនទាន់បានកំណត់ក្នុង Render");
   }
-
   const primaryModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-  const modelsToTry = [primaryModel, primaryModel, "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+  const modelsToTry = [primaryModel, primaryModel, primaryModel];
 
   const prompt = `
+  
+  
+
 អ្នកគឺជាអ្នកនិពន្ធបទចម្រៀងខ្មែរដែលមានជំនាញ។ សូមនិពន្ធបទចម្រៀងថ្មីជាភាសាខ្មែរទាំងស្រុង។
 ចំណងជើង៖ ${title || "បង្កើតដោយស្វ័យប្រវត្តិ"}
 ប្រធានបទ៖ ${topic || "ប្រធានបទទូទៅ"}
