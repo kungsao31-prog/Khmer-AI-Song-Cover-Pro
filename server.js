@@ -531,6 +531,37 @@ app.post("/api/song/write", async (req, res) => {
 // API: KHMER TTS VOICE
 // ==================================
 
+function splitKhmerText(text, maxLen) {
+  
+  const parts = text.match(/[^។.!?\n\s\u200b]+[។.!?\n\s\u200b]*/g) || [text];
+  const chunks = [];
+  let current = "";
+  for (const part of parts) {
+    if ((current + part).length <= maxLen) {
+      current += part;
+    } else {
+      if (current.trim()) chunks.push(current.trim());
+      if (part.length <= maxLen) {
+        current = part;
+      } else {
+        let i = 0;
+        while (i < part.length) {
+          let end = Math.min(i + maxLen, part.length);
+          while (end > i + 1 && /[\u17B6-\u17D3\u17D2\u17DD]/.test(part[end])) {
+            end--;
+          }
+          const slice = part.slice(i, end).trim();
+          if (slice) chunks.push(slice);
+          i = end;
+        }
+        current = "";
+      }
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+}
+
 app.post("/api/tts", async (req, res) => {
   try {
     const rawText = (req.body?.text || "").replace(/\[[^\]]+\]/g, " ").trim();
@@ -543,31 +574,118 @@ app.post("/api/tts", async (req, res) => {
     const fileName = `tts_${Date.now()}.mp3`;
     const filePath = path.join(OUTPUT_DIR, fileName);
 
-    const tts = new MsEdgeTTS();
-    await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    try {
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      const chunks = splitKhmerText(rawText, 500);
+      const buffers = [];
 
-    const chunks = rawText.match(/.{1,600}(\s|$)/gs) || [rawText];
-    const writeStream = fs.createWriteStream(filePath);
-
-    for (const chunk of chunks) {
-      if (!chunk.trim()) continue;
-      await new Promise((resolve, reject) => {
-        const resStream = tts.toStream(chunk.trim());
+      for (const chunk of chunks) {
+        const resStream = await tts.toStream(chunk);
         const audioStream = resStream.audioStream || resStream;
-        audioStream.on("data", (d) => writeStream.write(d));
-        audioStream.on("end", resolve);
-        audioStream.on("error", reject);
-      });
+        await new Promise((resolve, reject) => {
+          audioStream.on("data", (d) => buffers.push(d));
+          audioStream.on("end", resolve);
+          audioStream.on("error", (e) => reject(new Error(e?.message || "EdgeTTS error")));
+        });
+      }
+      if (!buffers.length) throw new Error("គ្មានទិន្នន័យសំឡេង");
+      fs.writeFileSync(filePath, Buffer.concat(buffers));
+    } catch (edgeErr) {
+      console.warn("EdgeTTS fallback to Google TTS:", edgeErr?.message || edgeErr);
+      const gChunks = splitKhmerText(rawText, 180);
+      const gBuffers = [];
+      for (const chunk of gChunks) {
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=km&q=${encodeURIComponent(chunk)}`;
+        const resp = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0" }
+        });
+        if (!resp.ok) throw new Error("Google TTS HTTP " + resp.status);
+        gBuffers.push(Buffer.from(await resp.arrayBuffer()));
+      }
+      fs.writeFileSync(filePath, Buffer.concat(gBuffers));
     }
-    writeStream.end();
-    await new Promise((r) => writeStream.on("finish", r));
 
     res.json({ ok: true, audioUrl: "/api/video/file/" + fileName });
   } catch (err) {
-      console.error("TTS Error:", err);
-    res.status(500).json({ ok: false, message: "មិនអាចបង្កើតសំឡេងបាន៖ " + err.message });
+    const errMsg = (err && err.message) ? err.message : String(err || "កំហុសមិនស្គាល់");
+    console.error("TTS Error:", err);
+    res.status(500).json({ ok: false, message: "មិនអាចបង្កើតសំឡេងបាន៖ " + errMsg });
   }
 });
+app.post("/api/video/create", upload.fields([{ name: "images", maxCount: 10 }, { name: "audio", maxCount: 1 }]), (req, res) => {
+  const imageFiles = req.files?.images || [];
+  const audioFile = req.files?.audio?.[0] || null;
+  if (!imageFiles.length) return res.status(400).json({ ok: false, message: "សូមបញ្ចូលរូបភាពជាមុន" });
+
+  const jobId = Date.now().toString();
+  jobs.set(jobId, { status: "processing", progress: 12, message: "កំពុងរៀបចំឯកសារ...", videoUrl: null, error: null });
+  res.json({ ok: true, jobId });
+
+  (async () => {
+    const savedImages = imageFiles.map((f) => f.path);
+    const audioPath = audioFile ? audioFile.path : null;
+    try {
+      const format = req.body.format === "16:9" ? "16:9" : "9:16";
+      const useMotion = req.body.motion === "zoom";
+      const width = format === "16:9" ? 960 : 540;
+      const height = format === "16:9" ? 540 : 960;
+      const outputFileName = `video_${jobId}.mp4`;
+      const outputPath = path.join(OUTPUT_DIR, outputFileName);
+      const estimatedSec = audioPath ? await getAudioDurationSec(audioPath) : Math.max(10, savedImages.length * 5);
+      const args = ["-y"];
+               if (savedImages.length === 1) {
+        const fps = useMotion ? 12 : 2;
+        args.push("-loop", "1", "-framerate", String(fps), "-i", savedImages[0]);
+        if (audioPath) args.push("-i", audioPath); else args.push("-t", "10");
+        const vf = useMotion
+          ? `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0004,1.18)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=${fps},format=yuv420p`
+          : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+        args.push("-vf", vf);
+      } else {
+        const durPerImg = Math.max(2, estimatedSec / savedImages.length);
+        let filter = "";
+        for (let i = 0; i < savedImages.length; i++) {
+          args.push("-loop", "1", "-framerate", "2", "-t", String(durPerImg), "-i", savedImages[i]);
+          filter += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v${i}];`;
+        }
+        if (audioPath) args.push("-i", audioPath);
+        for (let i = 0; i < savedImages.length; i++) filter += `[v${i}]`;
+        filter += `concat=n=${savedImages.length}:v=1:a=0[outv]`;
+        args.push("-filter_complex", filter, "-map", "[outv]");
+        if (audioPath) args.push("-map", `${savedImages.length}:a`);
+               }
+            args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "1");
+      if (!useMotion) args.push("-tune", "stillimage");
+      if (audioPath) args.push("-c:a", "aac", "-b:a", "128k", "-shortest");
+      args.push("-movflags", "+faststart", outputPath);
+
+      await runFfmpegWithProgress(args, jobId, estimatedSec);
+      const job = jobs.get(jobId);
+      if (job) { job.status = "done"; job.progress = 100; job.videoUrl = "/api/video/file/" + outputFileName; }
+    } catch (err) {
+      const job = jobs.get(jobId);
+      if (job) { job.status = "error"; job.error = err.message; }
+    } finally {
+      savedImages.forEach(safeUnlink);
+      safeUnlink(audioPath);
+    }
+  })();
+});
+
+app.get("/api/video/status/:jobId", (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  res.json(job || { status: "error", error: "រកមិនឃើញការងារនេះទេ" });
+});
+
+app.get("/api/video/file/:filename", (req, res) => {
+  const filePath = path.join(OUTPUT_DIR, path.basename(req.params.filename));
+  if (!fs.existsSync(filePath)) return res.status(404).send("រកមិនឃើញឯកសារទេ");
+  res.sendFile(filePath);
+});
+
+app.listen(PORT, () => console.log("Khmer AI Song Cover Pro running on port " + PORT));
+
 
 // ==================================
 // API: CREATE VIDEO (OPTIMIZED FOR RENDER FREE)
