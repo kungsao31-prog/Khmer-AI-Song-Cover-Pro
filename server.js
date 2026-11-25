@@ -587,9 +587,10 @@ app.post(
           else args.push("-t", "10");
 
           const vf = useMotion
-            ? `scale=${width * 2}:${height * 2}:force_original_aspect_ratio=decrease,pad=${width * 2}:${height * 2}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0005,1.25)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=20,format=yuv420p`
-            : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
-
+  ? `scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0005,1.2)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=720x1280:fps=15,format=yuv420p`
+  : `scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+args.push("-threads", "1");
+     
           args.push("-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-r", "20");
           if (audioPath) args.push("-c:a", "aac", "-b:a", "128k", "-shortest");
           args.push("-movflags", "+faststart", "-y", outputPath);
