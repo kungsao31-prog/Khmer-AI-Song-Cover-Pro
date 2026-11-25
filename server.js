@@ -91,7 +91,8 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
     throw new Error("GEMINI_API_KEY មិនទាន់បានកំណត់ក្នុង Render");
   }
   const primaryModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-  const modelsToTry = [primaryModel, primaryModel, primaryModel];
+  const modelsToTry = [primaryModel, primaryModel];
+  
 
   const prompt = `
   
@@ -120,12 +121,13 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
             "Content-Type": "application/json",
             "x-goog-api-key": apiKey
           },
-          body: JSON.stringify({
+                    body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.9, maxOutputTokens: 5000 }
+            generationConfig: { temperature: 0.9, maxOutputTokens: 2048 }
           })
         }
       );
+      
 
       const data = await response.json();
 
