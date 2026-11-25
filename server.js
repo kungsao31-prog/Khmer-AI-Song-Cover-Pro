@@ -535,5 +535,80 @@ app.post(
 
         const outputFileName = `video_${jobId}.mp4`;
         const outputPath = path.join(OUTPUT_DIR, outputFileName);
-        const
+                const args = [];
+        const estimatedSec = audioPath ? 60 : Math.max(10, savedImages.length * 5);
+
+        if (savedImages.length === 1) {
+          args.push("-loop", "1", "-i", savedImages[0]);
+          if (audioPath) args.push("-i", audioPath);
+          else args.push("-t", "10");
+
+          const vf = useMotion
+            ? `scale=${width * 2}:${height * 2}:force_original_aspect_ratio=decrease,pad=${width * 2}:${height * 2}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0005,1.25)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=20,format=yuv420p`
+            : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+
+          args.push("-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-r", "20");
+          if (audioPath) args.push("-c:a", "aac", "-b:a", "128k", "-shortest");
+          args.push("-movflags", "+faststart", "-y", outputPath);
+        } else {
+          const durationPerImage = 5;
+          let filterComplex = "";
+          for (let i = 0; i < savedImages.length; i++) {
+            args.push("-loop", "1", "-t", String(durationPerImage), "-i", savedImages[i]);
+            if (useMotion) {
+              filterComplex += `[${i}:v]scale=${width * 2}:${height * 2}:force_original_aspect_ratio=decrease,pad=${width * 2}:${height * 2}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.001,1.2)':d=${durationPerImage * 20}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=20,format=yuv420p[v${i}];`;
+            } else {
+              filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=20,format=yuv420p[v${i}];`;
+            }
+          }
+          for (let i = 0; i < savedImages.length; i++) filterComplex += `[v${i}]`;
+          filterComplex += `concat=n=${savedImages.length}:v=1:a=0[v]`;
+
+          if (audioPath) args.push("-i", audioPath);
+          args.push("-filter_complex", filterComplex, "-map", "[v]");
+          if (audioPath) args.push("-map", `${savedImages.length}:a`, "-c:a", "aac", "-b:a", "128k", "-shortest");
+          args.push("-c:v", "libx264", "-preset", "ultrafast", "-movflags", "+faststart", "-y", outputPath);
+        }
+
+        await runFfmpegWithProgress(args, jobId, estimatedSec);
+        fs.rmSync(jobDir, { recursive: true, force: true });
+
+        jobs.set(jobId, {
+          status: "done",
+          progress: 100,
+          message: "បានបង្កើតវីដេអូជោគជ័យ!",
+          videoUrl: `/api/video/file/${outputFileName}`,
+          error: null
+        });
+      } catch (err) {
+        fs.rmSync(jobDir, { recursive: true, force: true });
+        jobs.set(jobId, { status: "error", progress: 0, message: "បរាជ័យ", videoUrl: null, error: err.message });
+      }
+    })();
+  }
+);
+
+app.get("/api/video/status/:jobId", (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ status: "error", error: "រកមិនឃើញការងារនេះទេ" });
+  res.json(job);
+});
+
+app.get("/api/video/file/:filename", (req, res) => {
+  const safeName = path.basename(req.params.filename);
+  const filePath = path.join(OUTPUT_DIR, safeName);
+  if (!fs.existsSync(filePath)) return res.status(404).send("រកមិនឃើញវីដេអូទេ");
+  res.setHeader("Content-Type", "video/mp4");
+  res.sendFile(filePath);
+});
+
+app.use((err, req, res, next) => {
+  console.error(err.message);
+  res.status(err.status || 500).json({ ok: false, message: err.message || "Internal Server Error" });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("Khmer AI Song Cover Pro running on port " + PORT);
+});
+
         
