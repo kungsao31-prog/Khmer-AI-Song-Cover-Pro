@@ -11,6 +11,7 @@ const path = require("path");
 const os = require("os");
 const { spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static");
+const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -277,9 +278,16 @@ small{color:#9eb2c9}
 <label>អត្ថបទចម្រៀង</label>
 <textarea id="lyrics" placeholder="បទចម្រៀងនឹងបង្ហាញនៅទីនេះ..."></textarea>
 <button class="secondary" onclick="copyLyrics()">📋 ចម្លងអត្ថបទចម្រៀង</button>
-</section>
+<button type="button" id="ttsBtn" style="margin-top:10px; background:#8b5cf6;">🔊 បង្កើតសំឡេងខ្មែរ (AI Voice)</button>
+<div id="ttsBox" style="display:none; margin-top:10px;">
 
+  <audio id="ttsAudio" controls style="width:100%;"></audio>
+  <a id="ttsDownload" download="khmer-voice.mp3" style="display:block; text-align:center; margin-top:6px; color:#38bdf8;">⬇️ ទាញយកសំឡេង (MP3) ដើម្បីដាក់ក្នុងវីដេអូ</a>
+</div>
+<button type="button" id="sunoBtn" style="margin-top:10px; background:#f59e0b;">🎵 ចម្លងអត្ថបទ & បើក Suno AI</button>
+</section>
 <section class="card">
+
 <h2>02 - បញ្ចូលរូបភាព និងបទចម្រៀងបង្កើតវីដេអូ</h2>
 
 <label>១. បញ្ចូលរូបភាព (១ ឬច្រើនសន្លឹក)</label>
@@ -392,6 +400,37 @@ function copyLyrics() {
   navigator.clipboard.writeText(text);
   document.getElementById("songStatus").textContent = "បានចម្លងអត្ថបទចម្រៀងហើយ!";
 }
+document.getElementById("ttsBtn").addEventListener("click", async () => {
+  const text = document.getElementById("lyrics").value;
+  const voice = document.getElementById("voice").value;
+  const btn = document.getElementById("ttsBtn");
+  if (!text.trim()) return alert("សូមសរសេរបទចម្រៀងជាមុនសិន!");
+  btn.disabled = true;
+  btn.textContent = "⏳ កំពុងបង្កើតសំឡេងខ្មែរ...";
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.message);
+    document.getElementById("ttsAudio").src = data.audioUrl;
+    document.getElementById("ttsDownload").href = data.audioUrl;
+    document.getElementById("ttsBox").style.display = "block";
+  } catch (e) {
+    alert("បញ្ហា៖ " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔊 បង្កើតសំឡេងខ្មែរ (AI Voice)";
+  }
+});
+
+document.getElementById("sunoBtn").addEventListener("click", () => {
+  const text = document.getElementById("lyrics").value;
+  if (text.trim()) navigator.clipboard.writeText(text);
+  window.open("https://suno.com", "_blank");
+});
 
 function setProgress(pct, msg) {
   document.getElementById("progressWrap").style.display = "block";
@@ -605,7 +644,43 @@ app.get("/api/video/file/:filename", (req, res) => {
   res.setHeader("Content-Type", "video/mp4");
   res.sendFile(filePath);
 });
+app.post("/api/tts", async (req, res) => {
+  try {
+    const { text, voice } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ ok: false, message: "សូមបង្កើត ឬបញ្ចូលអត្ថបទជាមុនសិន" });
+    }
+    const cleanText = text.replace(/\[.*?\]/g, "").trim();
+    const voiceName = voice === "female" ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
+    const fileName = `voice_${Date.now()}.mp3`;
+    const filePath = path.join(OUTPUT_DIR, fileName);
 
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    const { audioStream } = tts.toStream(cleanText);
+
+    await new Promise((resolve, reject) => {
+      const writeStream = fs.createWriteStream(filePath);
+      audioStream.pipe(writeStream);
+      writeStream.on("finish", resolve);
+      writeStream.on("error", reject);
+      audioStream.on("error", reject);
+    });
+
+    res.json({ ok: true, audioUrl: `/api/audio/file/${fileName}` });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: "បរាជ័យ៖ " + err.message });
+  }
+});
+
+app.get("/api/audio/file/:filename", (req, res) => {
+  const safeName = path.basename(req.params.filename);
+  const filePath = path.join(OUTPUT_DIR, safeName);
+  if (!fs.existsSync(filePath)) return res.status(404).send("រកមិនឃើញសំឡេងទេ");
+  res.setHeader("Content-Type", "audio/mpeg");
+  res.sendFile(filePath);
+});
+                                               
 app.use((err, req, res, next) => {
   console.error(err.message);
   res.status(err.status || 500).json({ ok: false, message: err.message || "Internal Server Error" });
