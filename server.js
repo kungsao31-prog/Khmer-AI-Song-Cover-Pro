@@ -37,7 +37,7 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
     throw new Error("GEMINI_API_KEY មិនទាន់បានកំណត់ក្នុង Render");
   }
 
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
   const prompt = `
 អ្នកគឺជាអ្នកនិពន្ធបទចម្រៀងខ្មែរដែលមានជំនាញ។
