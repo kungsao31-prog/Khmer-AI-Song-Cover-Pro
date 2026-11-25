@@ -1,4 +1,3 @@
-
 "use strict";
 
 require("dotenv").config();
@@ -7,6 +6,11 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const { execFile } = require("child_process");
+const ffmpegPath = require("ffmpeg-static");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -17,7 +21,7 @@ app.use(express.json({ limit: "10mb" }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024, files: 10 },
+  limits: { fileSize: 50 * 1024 * 1024, files: 12 },
   fileFilter: (req, file, cb) => {
     const allowed =
       file.mimetype.startsWith("image/") ||
@@ -25,6 +29,12 @@ const upload = multer({
     cb(allowed ? null : new Error("Unsupported file type"), allowed);
   }
 });
+
+// បង្កើតថតបណ្ដោះអាសន្នសម្រាប់ទុកវីដេអូ
+const OUTPUT_DIR = path.join(os.tmpdir(), "khmer_ai_videos");
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
 
 // ==================================
 // GEMINI AI SONG WRITER
@@ -53,38 +63,11 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
 តម្រូវការ៖
 1. បង្កើតចំណងជើងបទចម្រៀងសមស្រប។
 2. សរសេរអត្ថបទជាភាសាខ្មែរធម្មជាតិ។
-3. មាន Intro, Verse 1, Chorus, Verse 2,
-   Bridge, Final Chorus និង Outro។
+3. មាន Intro, Verse 1, Chorus, Verse 2, Bridge, Final Chorus និង Outro។
 4. ច្រៀងងាយស្រួល មានចង្វាក់ និងពាក្យចួន។
 5. កុំចម្លងអត្ថបទបទចម្រៀងដែលមានស្រាប់។
 6. បង្កើតអត្ថបទថ្មីពេញបទ។
 7. កុំសរសេរការពន្យល់ក្រៅពីបទចម្រៀង។
-
-សូមបង្ហាញលទ្ធផលជាទម្រង់៖
-ចំណងជើង៖ ...
-ប្រភេទភ្លេង៖ ...
-សំឡេងច្រៀង៖ ...
-
-[Intro]
-...
-
-[Verse 1]
-...
-
-[Chorus]
-...
-
-[Verse 2]
-...
-
-[Bridge]
-...
-
-[Final Chorus]
-...
-
-[Outro]
-...
 `;
 
   const response = await fetch(
@@ -96,9 +79,7 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
         "x-goog-api-key": apiKey
       },
       body: JSON.stringify({
-        contents: [
-          { parts: [{ text: prompt }] }
-        ],
+        contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.9,
           maxOutputTokens: 5000
@@ -126,6 +107,22 @@ async function writeKhmerSong({ title, topic, style, voice, details }) {
   }
 
   return lyrics;
+}
+
+// ==================================
+// FFMPEG VIDEO RENDERER
+// ==================================
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath, args, { maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error("FFmpeg error:", stderr);
+        return reject(new Error("FFmpeg មិនអាចបង្កើតវីដេអូបានទេ"));
+      }
+      resolve();
+    });
+  });
 }
 
 // ==================================
@@ -166,16 +163,17 @@ input,textarea,select{
  border:1px solid #35465c;font-size:15px
 }
 textarea{min-height:110px}
-button{
- width:100%;padding:14px;border:0;
+button,.download-btn{
+ display:block;width:100%;padding:14px;border:0;
  border-radius:10px;background:#08b9d2;
- color:#001018;font-size:16px;
- font-weight:bold;margin-top:12px
+ color:#001018;font-size:16px;text-align:center;
+ font-weight:bold;margin-top:12px;text-decoration:none
 }
 button:disabled{opacity:.5}
 .secondary{background:#263a53;color:white}
 #status{color:#39e5b0;white-space:pre-wrap}
 #lyrics{min-height:350px;line-height:1.8}
+video{width:100%;border-radius:10px;margin-top:10px;background:#000}
 small{color:#9eb2c9}
 </style>
 </head>
@@ -242,8 +240,8 @@ small{color:#9eb2c9}
 </section>
 
 <section class="card">
-<h2>02 - Song Cover</h2>
-<label>Upload បទចម្រៀងដើម</label>
+<h2>02 - បញ្ចូលភ្លេង / Song Cover</h2>
+<label>Upload បទចម្រៀង (MP3 / WAV - ប្រើសម្រាប់ដាក់ក្នុងវីដេអូផងដែរ)</label>
 <input type="file" id="audio" accept="audio/*">
 
 <label>សំឡេង Cover</label>
@@ -258,7 +256,7 @@ small{color:#9eb2c9}
 <section class="card">
 <h2>03 - AI Music Video</h2>
 
-<label>បញ្ចូលរូបភាព</label>
+<label>បញ្ចូលរូបភាព (អាចរើសបានច្រើនសន្លឹក)</label>
 <input type="file" id="images" accept="image/*" multiple>
 
 <label>ទំហំវីដេអូ</label>
@@ -273,7 +271,7 @@ small{color:#9eb2c9}
 <option value="no">មិនបង្ហាញ</option>
 </select>
 
-<button onclick="makeVideo()">🎬 បង្កើតវីដេអូពេញបទ</button>
+<button id="videoBtn" onclick="makeVideo()">🎬 បង្កើតវីដេអូពេញបទ</button>
 </section>
 
 <section class="card">
@@ -287,7 +285,7 @@ small{color:#9eb2c9}
 <script>
 async function requestAPI(url, options) {
   const status = document.getElementById("status");
-  status.textContent = "កំពុងដំណើរការ...";
+  status.textContent = "កំពុងដំណើរការ... សូមរង់ចាំបន្តិច";
 
   try {
     const response = await fetch(url, options);
@@ -336,30 +334,23 @@ async function generateSong() {
 
 function copyLyrics() {
   const text = document.getElementById("lyrics").value;
-
   if (!text.trim()) {
-    document.getElementById("status").textContent =
-      "មិនទាន់មានអត្ថបទចម្រៀងទេ";
+    document.getElementById("status").textContent = "មិនទាន់មានអត្ថបទចម្រៀងទេ";
     return;
   }
-
   navigator.clipboard.writeText(text)
     .then(() => {
-      document.getElementById("status").textContent =
-        "បានចម្លងអត្ថបទចម្រៀងហើយ!";
+      document.getElementById("status").textContent = "បានចម្លងអត្ថបទចម្រៀងហើយ!";
     })
     .catch(() => {
-      document.getElementById("status").textContent =
-        "សូមជ្រើសរើស និងចម្លងអត្ថបទដោយដៃ";
+      document.getElementById("status").textContent = "សូមជ្រើសរើស និងចម្លងអត្ថបទដោយដៃ";
     });
 }
 
 async function makeCover() {
   const file = document.getElementById("audio").files[0];
-
   if (!file) {
-    document.getElementById("status").textContent =
-      "សូម Upload បទចម្រៀងជាមុន";
+    document.getElementById("status").textContent = "សូម Upload បទចម្រៀងជាមុន";
     return;
   }
 
@@ -375,27 +366,45 @@ async function makeCover() {
 
 async function makeVideo() {
   const files = document.getElementById("images").files;
+  const audioFile = document.getElementById("audio").files[0];
+  const btn = document.getElementById("videoBtn");
 
   if (!files.length) {
-    document.getElementById("status").textContent =
-      "សូមបញ្ចូលរូបភាពជាមុន";
+    document.getElementById("status").textContent = "សូមបញ្ចូលរូបភាពជាមុន";
     return;
   }
 
-  const form = new FormData();
+  btn.disabled = true;
+  btn.textContent = "⏳ កំពុងបង្កើតវីដេអូ...";
 
+  const form = new FormData();
   for (const file of files) {
     form.append("images", file);
+  }
+  if (audioFile) {
+    form.append("audio", audioFile);
   }
 
   form.append("format", document.getElementById("format").value);
   form.append("subtitles", document.getElementById("subtitles").value);
   form.append("lyrics", document.getElementById("lyrics").value);
 
-  await requestAPI("/api/video/create", {
+  const data = await requestAPI("/api/video/create", {
     method: "POST",
     body: form
   });
+
+  if (data && data.videoUrl) {
+    document.getElementById("result").innerHTML = \`
+      <video controls src="\${data.videoUrl}"></video>
+      <a class="download-btn" href="\${data.videoUrl}" download="khmer-music-video.mp4">
+        ⬇️ ទាញយកវីដេអូ (Download MP4)
+      </a>
+    \`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = "🎬 បង្កើតវីដេអូពេញបទ";
 }
 </script>
 
@@ -424,7 +433,6 @@ app.get("/api/health", (req, res) => {
 app.post("/api/song/write", async (req, res) => {
   try {
     const lyrics = await writeKhmerSong(req.body || {});
-
     res.json({
       ok: true,
       message: "បានសរសេរបទចម្រៀងខ្មែរជោគជ័យ!",
@@ -432,47 +440,18 @@ app.post("/api/song/write", async (req, res) => {
     });
   } catch (error) {
     console.error("Song writer error:", error.message);
-
-    res.status(500).json({
-      ok: false,
-      message: error.message
-    });
+    res.status(500).json({ ok: false, message: error.message });
   }
 });
 
 // ==================================
-// LEGACY GENERATE ENDPOINT
-// ==================================
-
-app.post("/api/song/generate", async (req, res) => {
-  try {
-    const lyrics = await writeKhmerSong(req.body || {});
-
-    res.json({
-      ok: true,
-      message: "បានបង្កើតបទចម្រៀងជោគជ័យ!",
-      lyrics
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      message: error.message
-    });
-  }
-});
-
-// ==================================
-// SONG COVER - NOT CONNECTED YET
+// SONG COVER
 // ==================================
 
 app.post("/api/song/cover", upload.single("audio"), (req, res) => {
   if (!req.file) {
-    return res.status(400).json({
-      ok: false,
-      message: "សូម Upload បទចម្រៀងជាមុន"
-    });
+    return res.status(400).json({ ok: false, message: "សូម Upload បទចម្រៀងជាមុន" });
   }
-
   res.status(501).json({
     ok: false,
     message: "មុខងារ Song Cover ត្រូវការភ្ជាប់ Voice Conversion Provider បន្ថែម"
@@ -480,33 +459,134 @@ app.post("/api/song/cover", upload.single("audio"), (req, res) => {
 });
 
 // ==================================
-// IMAGE UPLOAD
+// MUSIC VIDEO (CONNECTED WITH FFMPEG)
 // ==================================
 
-app.post("/api/images/upload", upload.array("images", 10), (req, res) => {
-  res.json({
-    ok: true,
-    count: req.files.length,
-    message: "បានទទួលរូបភាពជោគជ័យ"
-  });
-});
+app.post(
+  "/api/video/create",
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "audio", maxCount: 1 }
+  ]),
+  async (req, res) => {
+    const imageFiles = req.files?.images || [];
+    const audioFile = req.files?.audio?.[0] || null;
 
-// ==================================
-// MUSIC VIDEO - NOT CONNECTED YET
-// ==================================
+    if (!imageFiles.length) {
+      return res.status(400).json({
+        ok: false,
+        message: "សូមបញ្ចូលរូបភាពជាមុន"
+      });
+    }
 
-app.post("/api/video/create", upload.array("images", 10), (req, res) => {
-  if (!req.files || !req.files.length) {
-    return res.status(400).json({
-      ok: false,
-      message: "សូមបញ្ចូលរូបភាពជាមុន"
-    });
+    const jobId = Date.now().toString();
+    const jobDir = path.join(os.tmpdir(), "job_" + jobId);
+    fs.mkdirSync(jobDir, { recursive: true });
+
+    try {
+      const format = req.body.format === "16:9" ? "16:9" : "9:16";
+      const width = format === "16:9" ? 1280 : 720;
+      const height = format === "16:9" ? 720 : 1280;
+
+      const savedImages = [];
+      for (let i = 0; i < imageFiles.length; i++) {
+        const ext = path.extname(imageFiles[i].originalname) || ".jpg";
+        const imgPath = path.join(jobDir, `img_${i}${ext}`);
+        fs.writeFileSync(imgPath, imageFiles[i].buffer);
+        savedImages.push(imgPath);
+      }
+
+      let audioPath = null;
+      if (audioFile) {
+        const ext = path.extname(audioFile.originalname) || ".mp3";
+        audioPath = path.join(jobDir, `audio${ext}`);
+        fs.writeFileSync(audioPath, audioFile.buffer);
+      }
+
+      const outputFileName = `video_${jobId}.mp4`;
+      const outputPath = path.join(OUTPUT_DIR, outputFileName);
+      const args = [];
+
+      if (savedImages.length === 1) {
+        args.push("-loop", "1", "-i", savedImages[0]);
+        if (audioPath) {
+          args.push("-i", audioPath);
+        } else {
+          args.push("-t", "10");
+        }
+        args.push(
+          "-vf",
+          `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`,
+          "-c:v", "libx264",
+          "-tune", "stillimage",
+          "-preset", "ultrafast",
+          "-r", "24"
+        );
+        if (audioPath) {
+          args.push("-c:a", "aac", "-b:a", "128k", "-shortest");
+        }
+        args.push("-y", outputPath);
+      } else {
+        const durationPerImage = 5;
+        let filterComplex = "";
+        for (let i = 0; i < savedImages.length; i++) {
+          args.push("-loop", "1", "-t", String(durationPerImage), "-i", savedImages[i]);
+          filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p[v${i}];`;
+        }
+        for (let i = 0; i < savedImages.length; i++) {
+          filterComplex += `[v${i}]`;
+        }
+        filterComplex += `concat=n=${savedImages.length}:v=1:a=0[v]`;
+
+        if (audioPath) {
+          args.push("-i", audioPath);
+        }
+
+        args.push(
+          "-filter_complex", filterComplex,
+          "-map", "[v]"
+        );
+
+        if (audioPath) {
+          args.push("-map", `${savedImages.length}:a`, "-c:a", "aac", "-b:a", "128k", "-shortest");
+        }
+
+        args.push(
+          "-c:v", "libx264",
+          "-preset", "ultrafast",
+          "-y", outputPath
+        );
+      }
+
+      await runFfmpeg(args);
+
+      // សម្អាតឯកសារបណ្ដោះអាសន្ន
+      fs.rmSync(jobDir, { recursive: true, force: true });
+
+      res.json({
+        ok: true,
+        message: "បានបង្កើតវីដេអូជោគជ័យ!",
+        videoUrl: `/api/video/file/${outputFileName}`
+      });
+    } catch (error) {
+      fs.rmSync(jobDir, { recursive: true, force: true });
+      console.error("Video error:", error.message);
+      res.status(500).json({
+        ok: false,
+        message: error.message || "មិនអាចបង្កើតវីដេអូបានទេ"
+      });
+    }
   }
+);
 
-  res.status(501).json({
-    ok: false,
-    message: "មុខងារ Music Video ត្រូវការភ្ជាប់ Video Rendering Provider បន្ថែម"
-  });
+// បម្រើឯកសារវីដេអូសម្រាប់មើល និងទាញយក
+app.get("/api/video/file/:filename", (req, res) => {
+  const safeName = path.basename(req.params.filename);
+  const filePath = path.join(OUTPUT_DIR, safeName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("រកមិនឃើញវីដេអូទេ");
+  }
+  res.sendFile(filePath);
 });
 
 // ==================================
@@ -515,7 +595,6 @@ app.post("/api/video/create", upload.array("images", 10), (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error(err.message);
-
   res.status(err.status || 500).json({
     ok: false,
     message: err.message || "Internal Server Error"
@@ -529,3 +608,4 @@ app.use((err, req, res, next) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Khmer AI Song Cover Pro running on port " + PORT);
 });
+                             
